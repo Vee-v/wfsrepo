@@ -9,7 +9,7 @@ from vmbpy import VmbSystem
 from vmbpy.camera import Camera
 from vmbpy import PixelFormat
 
-mla_intr_shift= np.load(Path("experiments") / "delta-centroid-empirical.npy")
+mla_intr_shift= np.load(Path("experiment") / "delta-centroid-empirical.npy")
 
 
 def set_camera_parameters(camera: Camera, t_exp=None):
@@ -77,7 +77,7 @@ def take_images(n=100, t_exp=100):
     return
 
 def grab_frames_async():
-    def frame_handler(cam, frame):
+    def frame_handler(cam, stream, frame):  # Added 'stream' as the second argument
         nonlocal stop_event, exposure_time
         img = frame.as_numpy_ndarray().squeeze()
         cv2.imshow('Live Frame', img)
