@@ -11,7 +11,7 @@ from vmbpy import PixelFormat
 from scipy.optimize import curve_fit
 from tqdm import tqdm
 
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 mla_intr_shift= np.load(Path("experiment") / "delta-centroid-empirical.npy")
 
 
