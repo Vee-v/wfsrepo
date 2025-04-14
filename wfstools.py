@@ -8,6 +8,9 @@ from functools import partial
 from vmbpy import VmbSystem
 from vmbpy.camera import Camera
 from vmbpy import PixelFormat
+from scipy.optimize import curve_fit
+from tqdm import tqdm
+
 
 mla_intr_shift= np.load(Path("experiment") / "delta-centroid-empirical.npy")
 
@@ -55,6 +58,76 @@ def set_camera_parameters(camera: Camera, t_exp=None):
 def grab_frame(cam):
     frame = cam.get_frame().as_numpy_ndarray()
     return frame
+
+def calculate_subaperture_positions(grid_size=11, subap_size=28):
+    """
+    Calculates the x, y pixel coordinates of all subapertures in the Shack-Hartmann grid.
+
+    Args:
+        grid_size (int): Number of subapertures along one dimension (e.g., 11x11 grid).
+        subap_size (int): Size of each subaperture in pixels.
+
+    Returns:
+        Tensor: (grid_size^2, 2) array of x, y positions for each subaperture.
+    """
+    subap_centers = torch.arange(0, grid_size * subap_size, subap_size, device=device) + (subap_size / 2)-.5
+    x, y = torch.meshgrid(subap_centers, subap_centers, indexing='xy')
+    return torch.stack((x.flatten(), y.flatten()), dim=1)  # Shape: (grid_size^2, 2)
+
+def center_of_gravity_np(img):
+ 
+    y_coords, x_coords = np.repeat(np.arange(28), 28).reshape(28, 28), np.transpose(np.repeat(np.arange(28), 28).reshape(28, 28))
+    total_weight = np.sum(img)
+    x_centroid = np.sum((img * x_coords)) / total_weight
+    y_centroid = np.sum((img * y_coords)) / total_weight
+
+    return [x_centroid, y_centroid]
+
+def calculate_rotational_misalignment(img, cam):
+    assert len(img.shape) == 2, "Image should be 2D (W, H)"
+
+    cog_y = np.array([center_of_gravity_np(img[2+28*i:28*(i+1)+2, 28*5+2:28*6+2]) for i in range(11)])
+    cog_x = np.array([center_of_gravity_np(img[28*5+2:28*6+2, 2+28*i:28*(i+1)+2]) for i in range(11)])
+    pitchs = np.array([28*i for i in [5, 4, 3, 2, 1, 0, -1, -2, -3, -4, -5]])
+
+    cog_y[:, :] -= cog_y[5, :]
+    cog_y[:, 1] += pitchs[:]
+
+    cog_x[:, :] -= cog_x[5, :] 
+    cog_x[:, 0] += pitchs[:]
+
+    y = np.mean(np.vstack((cog_y[:, 0]*-1, cog_x[:, 1])), axis=0)
+    yerr = np.std(np.vstack((cog_y[:, 0]*-1, cog_x[:, 1])), axis=0)
+    yerr[5]=1e-9
+    x = np.mean(np.vstack((cog_y[:, 1], cog_x[:, 0])), axis=0)
+
+    def line(x, a):
+        return a * x
+
+    popt, pcov = curve_fit(line, x, y, sigma=yerr, p0=np.deg2rad(0.02))
+    if pcov.squeeze() == np.inf:
+        return calculate_rotational_misalignment(grab_frame(cam).squeeze(), cam)
+
+def calculate_reference(subap_positions, theta, deltas=torch.zeros(1, dtype=torch.float32)):
+    """
+    Calculates slopes by comparing centroids to rotated expected positions.
+
+    Args:
+        centroids (Tensor): Measured centroid positions (N^2, 2).
+        subap_positions (Tensor): Subaperture positions in the Shack-Hartmann grid (N^2, 2).
+        theta (float): Rotation angle of the lenslet array in radians.
+
+    Returns:
+        Tensor: Slopes in radians.
+    """
+    # Rotate subaperture positions
+    cos_theta, sin_theta = np.cos(-theta), np.sin(-theta)
+    rotation_matrix = torch.tensor([[cos_theta, -sin_theta], [sin_theta, cos_theta]], device=device, dtype=torch.float32)
+    rotated_positions = (subap_positions @ rotation_matrix.T)
+    # Calculate the expected centroids after accounting for rotation
+    reference_centroids = rotated_positions - subap_positions + deltas.to(device)/18. + 13.5
+
+    return reference_centroids
 
 def take_images(n=100, t_exp=100):
     with VmbSystem.get_instance() as vmb:
@@ -126,3 +199,39 @@ def grab_frames_async():
             cv2.destroyAllWindows()
 
     return
+
+def grab_frames_to_array(cam, n_frames):
+    """
+    Grabs a specified number of frames from the camera and saves them into an array.
+
+    Args:
+        cam (Camera): The camera object to grab frames from.
+        n_frames (int): Number of frames to grab.
+
+    Returns:
+        np.ndarray: Array of grabbed frames with shape (n_frames, height, width).
+    """
+    frames = []
+
+    def frame_handler(cam, stream, frame):
+        nonlocal frames, progress_bar
+        img = frame.as_numpy_ndarray().squeeze()
+        frames.append(img)
+        progress_bar.update(1)  # Update the progress bar
+        cam.queue_frame(frame)
+
+        # Stop streaming once the required number of frames is collected
+        if len(frames) >= n_frames:
+            stop_event.set()
+
+    stop_event = Event()
+    progress_bar = tqdm(total=n_frames, desc="Grabbing frames", unit="frame")
+
+    cam.start_streaming(frame_handler)
+
+    stop_event.wait()  # Wait until the required number of frames is collected
+
+    cam.stop_streaming()
+    progress_bar.close()  # Close the progress bar
+
+    return np.array(frames)
