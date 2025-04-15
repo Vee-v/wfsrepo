@@ -2,6 +2,8 @@ import cv2
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
+import threading
+import queue
 from threading import Event
 from pathlib import Path
 from functools import partial
@@ -11,8 +13,67 @@ from vmbpy import PixelFormat
 from scipy.optimize import curve_fit
 from tqdm import tqdm
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 mla_intr_shift= np.load(Path("experiment") / "delta-centroid-empirical.npy")
+
+
+class CameraThread:
+    def __init__(self, cam, buffer_size=1):
+        self.cam = cam
+        self.buffer = queue.Queue(maxsize=buffer_size)
+        self.running = threading.Event()
+        self.thread = threading.Thread(target=self._run)
+        self.lock = threading.Lock()
+
+    def start(self):
+        self.running.set()
+        self.thread.start()
+
+    def stop(self):
+        self.running.clear()
+        self.thread.join()
+
+    def _frame_handler(self, cam, stream, frame):
+        img = frame.as_numpy_ndarray().squeeze()
+        try:
+            self.buffer.put_nowait(img)
+        except queue.Full:
+            pass  # Drop frame if buffer is full
+        cam.queue_frame(frame)
+
+    def _run(self):
+        self.cam.start_streaming(self._frame_handler)
+        while self.running.is_set():
+            pass  # Keep thread alive
+        self.cam.stop_streaming()
+
+    def get_frame(self, timeout=1):
+        try:
+            return self.buffer.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        
+    def get_latest_frame(self):
+        frame = None
+        while not self.buffer.empty():
+            frame = self.buffer.get_nowait()
+        return frame   
+
+    def get_latest_frame_blocking(self, timeout=2):
+        """
+        Waits for at least one frame, then drains the buffer and returns the latest frame.
+        Returns None if no frame is available within timeout.
+        """
+        try:
+            # Wait for at least one frame
+            frame = self.buffer.get(timeout=timeout)
+            # Drain the rest, if any
+            while not self.buffer.empty():
+                frame = self.buffer.get_nowait()
+            return frame
+        except queue.Empty:
+            return None
 
 
 def set_camera_parameters(camera: Camera, t_exp=None):
@@ -21,15 +82,18 @@ def set_camera_parameters(camera: Camera, t_exp=None):
         According to the manual, the order of parameter setting needs to be the following (higher parameters affect lower parameters):
             1. Pixel format (MONO8)
             2. Sensor bit depth (MONO8)
-            3. Black level (0)
-            4. Reverse X/Y (not reverse)
-            5. Binning (2x2)
-            6. ROI settings (not sure yet)
-            7. Exposure time and framerate (619fps should be fastest?)
+            3. Device throughput limit (450MB/s)
+            4. Black level (0)
+            5. Reverse X/Y (not reverse)
+            6. Binning (2x2)
+            7. ROI settings (not sure yet)
+            8. Exposure time and framerate (619fps should be fastest?)
         '''
         # Set Pixel format and bit depth
         camera.set_pixel_format(PixelFormat.Mono8)
-
+        camera.SensorBitDepth.set("Bpp8")  # Set sensor bit depth to 8 bits
+        # Set device throughput limit
+        camera.DeviceLinkThroughputLimit.set(450000000)
         # Set Black level
         camera.BlackLevel.set(0.)
         
@@ -45,10 +109,11 @@ def set_camera_parameters(camera: Camera, t_exp=None):
 
         # Set exposure time
         if t_exp is None:
-            camera.ExposureTime.set(500)  # in microseconds
+            camera.ExposureTime.set(1200)  # in microseconds
         else:
             camera.ExposureTime.set(t_exp)
 
+        
         # Set gamma
         camera.Gamma.set(1.)
 
@@ -107,6 +172,7 @@ def calculate_rotational_misalignment(img, cam):
     popt, pcov = curve_fit(line, x, y, sigma=yerr, p0=np.deg2rad(0.02))
     if pcov.squeeze() == np.inf:
         return calculate_rotational_misalignment(grab_frame(cam).squeeze(), cam)
+    return np.arctan(popt[0])
 
 def calculate_reference(subap_positions, theta, deltas=torch.zeros(1, dtype=torch.float32)):
     """
@@ -149,8 +215,24 @@ def take_images(n=100, t_exp=100):
             plt.show() 
     return
 
-def grab_frames_async():
-    def frame_handler(cam, stream, frame):  # Added 'stream' as the second argument
+def grab_frames_async(camera_thread=None):
+    """
+    Displays frames in real time from a CameraThread buffer if provided, else starts camera stream.
+    """
+    if camera_thread is not None:
+        print("Displaying Frames in Real Time from CameraThread! Press 'q' to quit.")
+        import cv2
+        while True:
+            frame = camera_thread.get_frame(timeout=2)
+            if frame is not None:
+                cv2.imshow('Live Frame', frame)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+        cv2.destroyAllWindows()
+        return
+
+    def frame_handler(cam, stream, frame):  
         nonlocal stop_event, exposure_time
         img = frame.as_numpy_ndarray().squeeze()
         cv2.imshow('Live Frame', img)
@@ -200,18 +282,25 @@ def grab_frames_async():
 
     return
 
-def grab_frames_to_array(cam, n_frames):
+def grab_frames_to_array(cam, n_frames, camera_thread=None):
     """
-    Grabs a specified number of frames from the camera and saves them into an array.
+    Grabs a specified number of frames from the camera or from a CameraThread buffer.
 
     Args:
         cam (Camera): The camera object to grab frames from.
         n_frames (int): Number of frames to grab.
+        camera_thread (CameraThread, optional): If provided, use this thread's buffer.
 
     Returns:
         np.ndarray: Array of grabbed frames with shape (n_frames, height, width).
     """
     frames = []
+    if camera_thread is not None:
+        for _ in tqdm(range(n_frames), desc="Grabbing frames (thread)", unit="frame"):
+            frame = camera_thread.get_latest_frame_blocking(timeout=2)
+            if frame is not None:
+                frames.append(frame)
+        return np.array(frames)
 
     def frame_handler(cam, stream, frame):
         nonlocal frames, progress_bar
