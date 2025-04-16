@@ -9,7 +9,7 @@ if __name__ == "__main__":
     with VmbSystem.get_instance() as vmb:
         cams = vmb.get_all_cameras()
         with cams[0] as cam:
-            reference_positions, camera_thread = startup(cam)
+            reference_positions, camera_thread, valid_subap_mask = startup(cam)
             try:
                 grab_frames_async(camera_thread=camera_thread)
             finally:
