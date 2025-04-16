@@ -44,13 +44,14 @@ def startup(cam):
     plt.show()
     reference_positions = calculate_reference(subap_positions, theta)
     # 4 Subtract the intrinsic aberrations to the reference positions
-    reference_positions -= mla_intr_shift
+    reference_positions -= torch.from_numpy(mla_intr_shift).to(device, dtype=torch.float32)
     # 5 Get valid subaperture mask
     img = torch.from_numpy(frames.mean(axis=0)).to(device, dtype=torch.float32).squeeze()
     subaps = split_wfs_image(img)
     # Estimate noise baseline (e.g., from a dark frame or the lowest 5% of all pixels)
     noise_baseline = torch.quantile(subaps, 0.05)
     valid_subaps_mask = get_valid_subaps_mask(subaps, noise_baseline)
+
 
     return reference_positions, camera_thread, valid_subaps_mask
 
