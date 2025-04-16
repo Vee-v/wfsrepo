@@ -22,7 +22,7 @@ def startup(cam):
     # 2 Start camera thread
     camera_thread = CameraThread(cam)
     camera_thread.start()
-    # 3 Grab frames using the thread
+    # 3 Correct for rotational misalignment with the frames from the async thread
     frames = grab_frames_to_array(cam, 100, camera_thread=camera_thread)
     thetas = np.array([calculate_rotational_misalignment(frame, cam) for frame in frames])
     theta = np.nanmean(thetas)
@@ -43,6 +43,15 @@ def startup(cam):
     plt.savefig(Path("calib") / Path("rotational_misalignment.png"))
     plt.show()
     reference_positions = calculate_reference(subap_positions, theta)
-    return reference_positions, camera_thread
+    # 4 Subtract the intrinsic aberrations to the reference positions
+    reference_positions -= mla_intr_shift
+    # 5 Get valid subaperture mask
+    img = torch.from_numpy(frames.mean(axis=0)).to(device, dtype=torch.float32).squeeze()
+    subaps = split_wfs_image(img)
+    # Estimate noise baseline (e.g., from a dark frame or the lowest 5% of all pixels)
+    noise_baseline = torch.quantile(subaps, 0.05)
+    valid_subaps_mask = get_valid_subaps_mask(subaps, noise_baseline)
+
+    return reference_positions, camera_thread, valid_subaps_mask
 
 

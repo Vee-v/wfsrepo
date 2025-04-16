@@ -1,9 +1,9 @@
-import cv2
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import threading
 import queue
+from torchvision.transforms import v2
 from threading import Event
 from pathlib import Path
 from functools import partial
@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-mla_intr_shift= np.load(Path("experiment") / "delta-centroid-empirical.npy")
+mla_intr_shift= np.load(Path("experiment") / "delta-centroid-empirical.npy") * 1000 / 18  # from mm to pixels
 
 
 class CameraThread:
@@ -194,6 +194,38 @@ def calculate_reference(subap_positions, theta, deltas=torch.zeros(1, dtype=torc
     reference_centroids = rotated_positions - subap_positions + deltas.to(device)/18. + 13.5  # pixels
 
     return reference_centroids
+
+def split_wfs_image(img):
+    """
+    Splits an image into its subapertures.
+    Creates an view of a the input tensor. (121, 28, 28)
+
+    Returns:
+        Tensor: images of each subaperture.
+    
+    """
+
+    img = v2.CenterCrop(308)(img)
+    subaps = img.unfold(0, 28, 28).unfold(1, 28, 28)
+    return subaps.contiguous().view(-1, 28, 28)
+
+def get_valid_subaps_mask(subaps, noise_baseline, factor=3, min_pixels=3):
+    """
+    Returns a boolean mask indicating which subapertures are valid.
+    A subaperture is valid if it contains at least min_pixels pixels above factor * noise_baseline.
+    
+    Args:
+        subaps (Tensor): (N, 28, 28) tensor of subaperture images.
+        noise_baseline (float or Tensor): The noise baseline value.
+        factor (float): The factor above the baseline to consider a pixel "active".
+        min_pixels (int): Minimum number of active pixels for a subaperture to be valid.
+    
+    Returns:
+        Tensor: Boolean mask of shape (N,) indicating valid subapertures.
+    """
+    threshold = factor * noise_baseline
+    active_pixels = (subaps > threshold).sum(dim=(1,2))
+    return active_pixels >= min_pixels
 
 def take_images(n=100, t_exp=100):
     with VmbSystem.get_instance() as vmb:
