@@ -176,22 +176,22 @@ def calculate_rotational_misalignment(img, cam):
 
 def calculate_reference(subap_positions, theta, deltas=torch.zeros(1, dtype=torch.float32)):
     """
-    Calculates slopes by comparing centroids to rotated expected positions.
+    Calculates correct reference by comparing centroids to rotated expected positions.
 
     Args:
-        centroids (Tensor): Measured centroid positions (N^2, 2).
-        subap_positions (Tensor): Subaperture positions in the Shack-Hartmann grid (N^2, 2).
+        subap_positions (Tensor): Subaperture positions in the Shack-Hartmann grid (N^2, 2) in pixels.
         theta (float): Rotation angle of the lenslet array in radians.
+        deltas (Tensor): Array of tip-tilt offsets in pixels to be added to the reference centroids.
 
     Returns:
-        Tensor: Slopes in radians.
+        reference_centroids (Tensor): Reference centroid position for flat wavefront in pixels.
     """
     # Rotate subaperture positions
     cos_theta, sin_theta = np.cos(-theta), np.sin(-theta)
     rotation_matrix = torch.tensor([[cos_theta, -sin_theta], [sin_theta, cos_theta]], device=device, dtype=torch.float32)
     rotated_positions = (subap_positions @ rotation_matrix.T)
     # Calculate the expected centroids after accounting for rotation
-    reference_centroids = rotated_positions - subap_positions + deltas.to(device)/18. + 13.5
+    reference_centroids = rotated_positions - subap_positions + deltas.to(device)/18. + 13.5  # pixels
 
     return reference_centroids
 
