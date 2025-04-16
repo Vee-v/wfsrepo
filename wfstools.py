@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import threading
 import queue
+import time
 from torchvision.transforms import v2
 from threading import Event
 from pathlib import Path
@@ -79,6 +80,111 @@ class CameraThread:
         return self.fps
 
 
+class PhaseThread:
+    def __init__(self, frame_queue, B, reference_positions, valid_subap_mask):
+        self.frame_queue = frame_queue
+        self.B = B
+        self.reference_positions = reference_positions
+        self.valid_subap_mask = valid_subap_mask
+        self.latest_phase = None
+        self.phase_lock = threading.Lock()
+        self.running = threading.Event()
+        self.thread = threading.Thread(target=self._run)
+        self.fps = 0.0
+        self._frame_count = 0
+        self._fps_lock = threading.Lock()
+        self._watchdog_thread = threading.Thread(target=self._watchdog)
+
+    def start(self):
+        self.running.set()
+        self.thread.start()
+        self._watchdog_thread.start()
+
+    def stop(self):
+        self.running.clear()
+        self.thread.join()
+        self._watchdog_thread.join()
+
+    def _run(self):
+        while self.running.is_set():
+            try:
+                frame = self.frame_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            img = torch.from_numpy(frame).to(device, dtype=torch.float32).squeeze()
+            subaps = split_wfs_image(img)
+            centroids = center_of_gravity(subaps)
+            slopes = centroids_to_slopes(centroids, self.reference_positions)
+            slopes_x, slopes_y = hudgin_slopes(slopes)
+            phase = (torch.linalg.lstsq(self.B, torch.cat([slopes_x, slopes_y, torch.zeros(1, device=device)])).solution / (2*np.pi)) * 633e-3
+            with self.phase_lock:
+                self.latest_phase = phase
+            with self._fps_lock:
+                self._frame_count += 1
+
+    def _watchdog(self):
+        import time
+        while self.running.is_set():
+            with self._fps_lock:
+                start_count = self._frame_count
+            time.sleep(1.0)
+            with self._fps_lock:
+                end_count = self._frame_count
+                self._frame_count = 0
+            self.fps = end_count - start_count
+
+    def get_phase(self):
+        with self.phase_lock:
+            return self.latest_phase
+
+    def get_fps(self):
+        return self.fps
+
+
+def generate_B_matrix(N, piston=False):
+    """
+    Generates the B matrix for Hudgin geometry for a square grid of N x N phase points.
+    
+    Args:
+        N (int): Number of phase points along one dimension (N x N grid)
+        
+    Returns:
+        torch.Tensor: The B matrix with shape (2 * N * (N - 1), N * N)
+    """
+
+    # Total number of phase points
+    num_phase_points = N * N
+    
+    # Total number of slopes in x and y directions
+    num_slopes = 2 * N * (N - 1)
+    
+    # Initialize B matrix (2 * N * (N - 1) rows, N * N columns)
+    B = torch.zeros((num_slopes, num_phase_points), device=device)
+    
+    row = 0
+    
+    # Loop through each phase point for x-slopes
+    for i in range(N):
+        for j in range(N-1):  # One fewer slope than phase points in each row
+            idx_1 = i * N + j        # Index of phi(i, j)
+            idx_2 = i * N + (j + 1)  # Index of phi(i, j+1)
+            B[row, idx_1] = 1        # Coefficient for phi(i, j)
+            B[row, idx_2] = -1       # Coefficient for phi(i, j+1)
+            row += 1
+    
+    # Loop through each phase point for y-slopes
+    for i in range(N-1):  # One fewer slope than phase points in each column
+        for j in range(N):
+            idx_1 = i * N + j        # Index of phi(i, j)
+            idx_2 = (i + 1) * N + j  # Index of phi(i+1, j)
+            B[row, idx_1] = 1        # Coefficient for phi(i, j)
+            B[row, idx_2] = -1       # Coefficient for phi(i+1, j)
+            row += 1
+    if not piston:
+        piston_row = torch.ones((1, num_phase_points), device=device)
+        B = torch.cat((B, piston_row), dim=0)
+    return B
+
 def set_camera_parameters(camera: Camera, t_exp=None):
     with camera:
         ''' 
@@ -123,10 +229,6 @@ def set_camera_parameters(camera: Camera, t_exp=None):
         # Set gain
         camera.Gain.set(1)
 
-def grab_frame(cam):
-    frame = cam.get_frame().as_numpy_ndarray()
-    return frame
-
 def calculate_subaperture_positions(grid_size=11, subap_size=28):
     """
     Calculates the x, y pixel coordinates of all subapertures in the Shack-Hartmann grid.
@@ -150,6 +252,44 @@ def center_of_gravity_np(img):
     y_centroid = np.sum((img * y_coords)) / total_weight
 
     return [x_centroid, y_centroid]
+
+def center_of_gravity(img):
+    """
+    Centroids of an image, or tensor of images.
+    Centroids over the last 2 dimensions.
+
+    Parameters:
+        img (Tensor): (B, W, H)
+
+    Returns:
+        Tensor: Tensor of centroid values (B, 2)
+
+    """
+    # Ensure image is a 3D tensor
+    assert len(img.shape) == 3, "Image should be 2D (B, W, H)"
+
+    x_coords, y_coords = torch.arange(28).view(1, 1, 28).to(img.device), torch.arange(28, dtype=torch.float32).view(1, 28, 1).to(img.device)
+
+    total_weight = img.sum(dim=[1, 2], keepdim=True)
+    total_weight = torch.where(total_weight == 0, torch.tensor(float('nan')).to(img.device), total_weight)
+
+    x_centroid = (img * x_coords).sum(dim=[1, 2], keepdim=True) / total_weight
+    y_centroid = (img * y_coords).sum(dim=[1, 2], keepdim=True) / total_weight
+
+    return torch.cat([x_centroid, y_centroid], dim=-1).squeeze()  # Shape: [B, 2]
+
+def centroids_to_slopes(centroids, reference):
+    slopes = (centroids - reference) * 18 / 13800  # radian
+    return torch.arcsin(slopes)
+
+def hudgin_slopes(slopes):  # optimizar
+    edge_slopes = list(range(10, 121, 11))
+    slopes_x = slopes[:, 0]
+    slopes_y = slopes[:-11, 1]
+    mask = torch.ones(slopes.size(0), dtype=torch.bool)
+    mask[edge_slopes] = False
+    slopes_x = slopes_x[mask]
+    return slopes_x, slopes_y
 
 def calculate_rotational_misalignment(img, cam):
     assert len(img.shape) == 2, "Image should be 2D (W, H)"
