@@ -59,12 +59,12 @@ class CameraThread:
     def _watchdog(self):
         import time
         while self.running.is_set():
-            time0 = time.time()
             with self._fps_lock:
                 start_count = self._frame_count
             time.sleep(1.0)
             with self._fps_lock:
                 end_count = self._frame_count
+                self._frame_count = 0  # Reset frame count after getting FPS
             self.fps = end_count - start_count
 
     def get_frame(self, timeout=1):
@@ -74,10 +74,6 @@ class CameraThread:
             self._new_frame_event.clear()
             return frame
         return None
-
-    def get_latest_frame(self):
-        with self.frame_lock:
-            return self.latest_frame.copy() if self.latest_frame is not None else None
 
     def get_fps(self):
         return self.fps
