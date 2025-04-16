@@ -12,9 +12,12 @@ if __name__ == "__main__":
             reference_positions, camera_thread, valid_subap_mask = startup(cam)
             # Now that we have the camera thread, the subaperture mask and the reference centroid positions,
             # we start wavefront sensing.
-            while True:
-                frame = camera_thread.get_frame(timeout=2)
-                fps = camera_thread.get_fps()
-                print(f"Current FPS: {fps}", end='\r')
-                # Optionally, add a small sleep to avoid flooding the terminal
-                time.sleep(0.1)
+            try:
+                while True:
+                    frame = camera_thread.get_frame(timeout=1)
+                    fps = camera_thread.get_fps()
+                    print(f"Current FPS: {fps}", end='\r')
+                    time.sleep(0.1)
+            except KeyboardInterrupt:
+                print("\nStopping all threads and exiting...")
+                camera_thread.stop()
