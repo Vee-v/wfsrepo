@@ -58,7 +58,6 @@ class CameraThread:
         self.cam.stop_streaming()
 
     def _watchdog(self):
-        import time
         while self.running.is_set():
             with self._fps_lock:
                 start_count = self._frame_count
@@ -123,7 +122,6 @@ class PhaseThread:
                 self._frame_count += 1
 
     def _watchdog(self):
-        import time
         while self.running.is_set():
             with self._fps_lock:
                 start_count = self._frame_count
@@ -313,8 +311,7 @@ def calculate_rotational_misalignment(img, cam):
         return a * x
 
     popt, pcov = curve_fit(line, x, y, sigma=yerr, p0=np.deg2rad(0.02))
-    if pcov.squeeze() == np.inf:
-        return calculate_rotational_misalignment(grab_frame(cam).squeeze(), cam)
+
     return np.arctan(popt[0])
 
 def calculate_reference(subap_positions, theta, deltas=torch.zeros(1, dtype=torch.float32)):
@@ -370,25 +367,6 @@ def get_valid_subaps_mask(subaps, noise_baseline, factor=3, min_pixels=3):
     active_pixels = (subaps > threshold).sum(dim=(1,2))
     return active_pixels >= min_pixels
 
-def take_images(n=100, t_exp=100):
-    with VmbSystem.get_instance() as vmb:
-        cams = vmb.get_all_cameras()
-        with cams[0] as cam:
-            # set parameters for wavefront sensor cmos
-            set_camera_parameters(cam, t_exp=t_exp)
-
-            frames = np.zeros((n, 312, 312))
-            # frames = np.expand_dims(frames, axis=0)
-            print("Taking Images!\n")
-            for i in range(n):
-                frames[i, :, :] = grab_frame(cam).squeeze()
-            frame = np.mean(frames, axis=0).squeeze()
-            np.save("img.npy", frame)
-            plt.figure()
-            plt.imshow(frame)
-            plt.colorbar()
-            plt.show() 
-    return
 
 def grab_frames_async(camera_thread=None):
     """
