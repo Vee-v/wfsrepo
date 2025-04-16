@@ -19,61 +19,68 @@ mla_intr_shift= np.load(Path("experiment") / "delta-centroid-empirical.npy") * 1
 
 
 class CameraThread:
-    def __init__(self, cam, buffer_size=1):
+    def __init__(self, cam):
         self.cam = cam
-        self.buffer = queue.Queue(maxsize=buffer_size)
+        self.latest_frame = None
+        self.frame_lock = threading.Lock()
         self.running = threading.Event()
         self.thread = threading.Thread(target=self._run)
-        self.lock = threading.Lock()
+        self.fps = 0.0
+        self._frame_count = 0
+        self._fps_lock = threading.Lock()
+        self._watchdog_thread = threading.Thread(target=self._watchdog)
+        self._new_frame_event = threading.Event()
 
     def start(self):
         self.running.set()
         self.thread.start()
+        self._watchdog_thread.start()
 
     def stop(self):
         self.running.clear()
         self.thread.join()
+        self._watchdog_thread.join()
 
     def _frame_handler(self, cam, stream, frame):
         img = frame.as_numpy_ndarray().squeeze()
-        try:
-            self.buffer.put_nowait(img)
-        except queue.Full:
-            pass  # Drop frame if buffer is full
+        with self.frame_lock:
+            self.latest_frame = img
+        with self._fps_lock:
+            self._frame_count += 1
+        self._new_frame_event.set()
         cam.queue_frame(frame)
 
     def _run(self):
         self.cam.start_streaming(self._frame_handler)
         while self.running.is_set():
-            pass  # Keep thread alive
+            threading.Event().wait(0.01)  # Sleep briefly to yield thread
         self.cam.stop_streaming()
 
-    def get_frame(self, timeout=1):
-        try:
-            return self.buffer.get(timeout=timeout)
-        except queue.Empty:
-            return None
-        
-    def get_latest_frame(self):
-        frame = None
-        while not self.buffer.empty():
-            frame = self.buffer.get_nowait()
-        return frame   
+    def _watchdog(self):
+        import time
+        while self.running.is_set():
+            time0 = time.time()
+            with self._fps_lock:
+                start_count = self._frame_count
+            time.sleep(1.0)
+            with self._fps_lock:
+                end_count = self._frame_count
+            self.fps = end_count - start_count
 
-    def get_latest_frame_blocking(self, timeout=2):
-        """
-        Waits for at least one frame, then drains the buffer and returns the latest frame.
-        Returns None if no frame is available within timeout.
-        """
-        try:
-            # Wait for at least one frame
-            frame = self.buffer.get(timeout=timeout)
-            # Drain the rest, if any
-            while not self.buffer.empty():
-                frame = self.buffer.get_nowait()
+    def get_frame(self, timeout=1):
+        if self._new_frame_event.wait(timeout=timeout):
+            with self.frame_lock:
+                frame = self.latest_frame.copy() if self.latest_frame is not None else None
+            self._new_frame_event.clear()
             return frame
-        except queue.Empty:
-            return None
+        return None
+
+    def get_latest_frame(self):
+        with self.frame_lock:
+            return self.latest_frame.copy() if self.latest_frame is not None else None
+
+    def get_fps(self):
+        return self.fps
 
 
 def set_camera_parameters(camera: Camera, t_exp=None):
