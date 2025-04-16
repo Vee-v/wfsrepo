@@ -336,7 +336,7 @@ def grab_frames_to_array(cam, n_frames, camera_thread=None):
     frames = []
     if camera_thread is not None:
         for _ in tqdm(range(n_frames), desc="Grabbing frames (thread)", unit="frame"):
-            frame = camera_thread.get_latest_frame_blocking(timeout=2)
+            frame = camera_thread.get_frame()
             if frame is not None:
                 frames.append(frame)
         return np.array(frames)

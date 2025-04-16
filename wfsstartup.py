@@ -23,7 +23,7 @@ def startup(cam):
     camera_thread = CameraThread(cam)
     camera_thread.start()
     # 3 Correct for rotational misalignment with the frames from the async thread
-    frames = grab_frames_to_array(cam, 100, camera_thread=camera_thread)
+    frames = grab_frames_to_array(cam, 10000, camera_thread=camera_thread)
     thetas = np.array([calculate_rotational_misalignment(frame, cam) for frame in frames])
     theta = np.nanmean(thetas)
     theta_err = np.nanstd(thetas)
