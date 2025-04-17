@@ -13,7 +13,6 @@ from vmbpy.camera import Camera
 from vmbpy import PixelFormat
 from scipy.optimize import curve_fit
 from tqdm import tqdm
-import cv2
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -81,7 +80,7 @@ class CameraThread:
 
 
 class PhaseThread:
-    def __init__(self, frame_queue, B, reference_positions, valid_subap_mask, display_phase=False):
+    def __init__(self, frame_queue, B, reference_positions, valid_subap_mask):
         self.frame_queue = frame_queue
         self.B = B
         self.reference_positions = reference_positions
@@ -94,7 +93,6 @@ class PhaseThread:
         self._frame_count = 0
         self._fps_lock = threading.Lock()
         self._watchdog_thread = threading.Thread(target=self._watchdog)
-        self.display_phase = display_phase
 
     def start(self):
         self.running.set()
@@ -105,8 +103,6 @@ class PhaseThread:
         self.running.clear()
         self.thread.join()
         self._watchdog_thread.join()
-        if self.display_phase:
-            cv2.destroyAllWindows()
 
     def _run(self):
         while self.running.is_set():
@@ -124,22 +120,6 @@ class PhaseThread:
                 self.latest_phase = phase
             with self._fps_lock:
                 self._frame_count += 1
-            if self.display_phase:
-                # Normalize phase for display
-                phase_np = phase.detach().cpu().numpy()
-                phase_img = phase_np[:-1].reshape(11, 11) if phase_np.shape[0] == 122 else phase_np.reshape(11, 11)
-                phase_img_resized = cv2.resize(phase_img, (308, 308), interpolation=cv2.INTER_CUBIC)
-                norm_phase = cv2.normalize(phase_img_resized, None, 0, 255, cv2.NORM_MINMAX)
-                norm_phase = norm_phase.astype(np.uint8)
-                # Prepare frame for display (normalize and convert to uint8)
-                norm_frame = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX)
-                norm_frame = norm_frame.astype(np.uint8)
-                frame_resized = cv2.resize(norm_frame, (308, 308), interpolation=cv2.INTER_CUBIC)
-                combined = np.hstack((frame_resized, norm_phase))
-                cv2.imshow('Frame (left) | Phase (right)', combined)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    self.running.clear()
-                    break
 
     def _watchdog(self):
         while self.running.is_set():
