@@ -79,14 +79,13 @@ class CameraThread:
         return self.fps
 
 
-class PhaseThread:
-    def __init__(self, frame_queue, B, reference_positions, valid_subap_mask):
+class SlopesThread:
+    def __init__(self, frame_queue, reference_positions, valid_subap_mask):
         self.frame_queue = frame_queue
-        self.B = B
         self.reference_positions = reference_positions
         self.valid_subap_mask = valid_subap_mask
-        self.latest_phase = None
-        self.phase_lock = threading.Lock()
+        self.latest_slopes = None
+        self.slopes_lock = threading.Lock()
         self.running = threading.Event()
         self.thread = threading.Thread(target=self._run)
         self.fps = 0.0
@@ -114,10 +113,8 @@ class PhaseThread:
             subaps = split_wfs_image(img)
             centroids = center_of_gravity(subaps)
             slopes = centroids_to_slopes(centroids, self.reference_positions)
-            slopes_x, slopes_y = hudgin_slopes(slopes)
-            phase = (torch.linalg.lstsq(self.B, torch.cat([slopes_x, slopes_y, torch.zeros(1, device=device)])).solution / (2*np.pi)) * 633e-3
-            with self.phase_lock:
-                self.latest_phase = phase
+            with self.slopes_lock:
+                self.latest_slopes = slopes
             with self._fps_lock:
                 self._frame_count += 1
 
@@ -131,9 +128,9 @@ class PhaseThread:
                 self._frame_count = 0
             self.fps = end_count - start_count
 
-    def get_phase(self):
-        with self.phase_lock:
-            return self.latest_phase
+    def get_slopes(self):
+        with self.slopes_lock:
+            return self.latest_slopes
 
     def get_fps(self):
         return self.fps

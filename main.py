@@ -4,6 +4,8 @@ from vmbpy import VmbSystem
 import queue
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 if __name__ == "__main__":
     print("Starting up the camera...")
@@ -14,8 +16,8 @@ if __name__ == "__main__":
         cams = vmb.get_all_cameras()
         with cams[0] as cam:
             reference_positions, camera_thread, valid_subap_mask = startup(cam)
-            phase_thread = PhaseThread(frame_queue, B, reference_positions, valid_subap_mask)
-            phase_thread.start()
+            slopes_thread = SlopesThread(frame_queue, reference_positions, valid_subap_mask)
+            slopes_thread.start()
             try:
                 while True:
                     frame = camera_thread.get_frame(timeout=1)
@@ -25,30 +27,42 @@ if __name__ == "__main__":
                         except queue.Full:
                             pass  # Drop frame if queue is full
                     cam_fps = camera_thread.get_fps()
-                    phase_fps = phase_thread.get_fps()
-                    latest_phase = phase_thread.get_phase()
-                    if latest_phase is not None and frame is not None:
-                        # Normalize phase for display
-                        phase_np = latest_phase.detach().cpu().numpy()
-                        phase_img = phase_np[:-1].reshape(11, 11) if phase_np.shape[0] == 122 else phase_np.reshape(11, 11)
-                        # Interpolate phase to 308x308
-                        phase_img_resized = cv2.resize(phase_img, (308, 308), interpolation=cv2.INTER_CUBIC)
-                        norm_phase = cv2.normalize(phase_img_resized, None, 0, 255, cv2.NORM_MINMAX)
-                        norm_phase = norm_phase.astype(np.uint8)
-                        # Prepare frame for display (normalize and convert to uint8)
-                        norm_frame = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX)
-                        norm_frame = norm_frame.astype(np.uint8)
-                        # Ensure frame is 2D, resize to 308x308
-                        frame_resized = cv2.resize(norm_frame, (308, 308), interpolation=cv2.INTER_CUBIC)
-                        # Stack phase and frame side by side
-                        combined = np.hstack((frame_resized, norm_phase))
-                        cv2.imshow('Frame (left) | Phase (right)', combined)
+                    slopes_fps = slopes_thread.get_fps()
+                    latest_slopes = slopes_thread.get_slopes()
+
+                    # Display frame and slopes plot side by side
+                    if frame is not None and latest_slopes is not None:
+                        # Prepare the frame for display (grayscale to BGR if needed)
+                        if len(frame.shape) == 2:
+                            frame_disp = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                        else:
+                            frame_disp = frame.copy()
+                        # Prepare the slopes plot
+                        fig, ax = plt.subplots(figsize=(3, 2), dpi=100)
+                        ax.plot(np.concatenate([latest_slopes[:,0], latest_slopes[:,1]]))
+                        ax.set_title('Latest Slopes')
+                        ax.set_xlabel('Index')
+                        ax.set_ylabel('Slope')
+                        fig.tight_layout()
+                        canvas = FigureCanvas(fig)
+                        canvas.draw()
+                        plot_img = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
+                        plot_img = plot_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+                        plt.close(fig)
+                        # Resize plot to match frame height
+                        h_frame = frame_disp.shape[0]
+                        h_plot, w_plot, _ = plot_img.shape
+                        scale = h_frame / h_plot
+                        plot_img_resized = cv2.resize(plot_img, (int(w_plot*scale), h_frame))
+                        # Concatenate images
+                        combined = np.concatenate((frame_disp, plot_img_resized), axis=1)
+                        cv2.imshow('Frame and Slopes', combined)
                         if cv2.waitKey(1) & 0xFF == ord('q'):
                             break
-                    print(f"Camera FPS: {cam_fps:.2f} | Phase FPS: {phase_fps:.2f}", end='\r')
+                    print(f"Camera FPS: {cam_fps:.2f} | Slopes FPS: {slopes_fps:.2f}", end='\r')
             except KeyboardInterrupt:
                 print("\nStopping all threads and exiting...")
             finally:
                 camera_thread.stop()
-                phase_thread.stop()
+                slopes_thread.stop()
                 cv2.destroyAllWindows()
