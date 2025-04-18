@@ -13,6 +13,7 @@ from vmbpy.camera import Camera
 from vmbpy import PixelFormat
 from scipy.optimize import curve_fit
 from tqdm import tqdm
+import cv2
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -113,6 +114,7 @@ class SlopesThread:
             subaps = split_wfs_image(img)
             centroids = center_of_gravity(subaps)
             slopes = centroids_to_slopes(centroids, self.reference_positions)
+            slopes = slopes[self.valid_subap_mask]
             with self.slopes_lock:
                 self.latest_slopes = slopes
             with self._fps_lock:
@@ -134,6 +136,37 @@ class SlopesThread:
 
     def get_fps(self):
         return self.fps
+
+
+class FrameQueueThread:
+    """
+    Thread that pulls frames from CameraThread, puts them into the processing queue,
+    and updates the latest_frame for display.
+    """
+    def __init__(self, camera_thread, frame_queue, latest_frame):
+        self.camera_thread = camera_thread
+        self.frame_queue = frame_queue
+        self.latest_frame = latest_frame  # Should be a one-element list
+        self.running = threading.Event()
+        self.thread = threading.Thread(target=self._run)
+
+    def start(self):
+        self.running.set()
+        self.thread.start()
+
+    def stop(self):
+        self.running.clear()
+        self.thread.join()
+
+    def _run(self):
+        while self.running.is_set():
+            frame = self.camera_thread.get_frame(timeout=1)
+            if frame is not None:
+                try:
+                    self.frame_queue.put(frame, timeout=1)
+                    self.latest_frame[0] = frame
+                except Exception as e:
+                    print(f"FrameQueueThread error: {e}")
 
 
 def generate_B_matrix(N, piston=False):

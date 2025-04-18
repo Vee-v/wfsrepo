@@ -6,11 +6,12 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from threading import Event
 
 if __name__ == "__main__":
     print("Starting up the camera...")
     B = generate_B_matrix(11)
-    frame_queue = queue.Queue(maxsize=5)  # Buffer for frames between threads
+    frame_queue = queue.Queue(maxsize=5)  # Buffer for frames between camera and slopes threads
 
     with VmbSystem.get_instance() as vmb:
         cams = vmb.get_all_cameras()
@@ -18,51 +19,29 @@ if __name__ == "__main__":
             reference_positions, camera_thread, valid_subap_mask = startup(cam)
             slopes_thread = SlopesThread(frame_queue, reference_positions, valid_subap_mask)
             slopes_thread.start()
+
+            # Use a one-element list for thread-safe frame sharing
+            latest_frame = [None]
+            frame_queue_thread = FrameQueueThread(camera_thread, frame_queue, latest_frame)
+            frame_queue_thread.start()
+
             try:
                 while True:
-                    frame = camera_thread.get_frame(timeout=1)
+                    frame = latest_frame[0]
                     if frame is not None:
-                        try:
-                            frame_queue.put_nowait(frame)
-                        except queue.Full:
-                            pass  # Drop frame if queue is full
+                        cv2.imshow('WFS frame', frame)
+                        key = cv2.waitKey(1) & 0xFF
+                        if key == ord('q'):
+                            break
+                    print(f"Frame queue size: {frame_queue.qsize()} ", end=' | ')
                     cam_fps = camera_thread.get_fps()
                     slopes_fps = slopes_thread.get_fps()
                     latest_slopes = slopes_thread.get_slopes()
-
-                    # Display frame and slopes plot side by side
-                    if frame is not None and latest_slopes is not None:
-                        # Prepare the frame for display (grayscale to BGR if needed)
-                        if len(frame.shape) == 2:
-                            frame_disp = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-                        else:
-                            frame_disp = frame.copy()
-                        # Prepare the slopes plot
-                        fig, ax = plt.subplots(figsize=(3, 2), dpi=100)
-                        ax.plot(np.concatenate([latest_slopes[:,0], latest_slopes[:,1]]))
-                        ax.set_title('Latest Slopes')
-                        ax.set_xlabel('Index')
-                        ax.set_ylabel('Slope')
-                        fig.tight_layout()
-                        canvas = FigureCanvas(fig)
-                        canvas.draw()
-                        plot_img = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
-                        plot_img = plot_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-                        plt.close(fig)
-                        # Resize plot to match frame height
-                        h_frame = frame_disp.shape[0]
-                        h_plot, w_plot, _ = plot_img.shape
-                        scale = h_frame / h_plot
-                        plot_img_resized = cv2.resize(plot_img, (int(w_plot*scale), h_frame))
-                        # Concatenate images
-                        combined = np.concatenate((frame_disp, plot_img_resized), axis=1)
-                        cv2.imshow('Frame and Slopes', combined)
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            break
                     print(f"Camera FPS: {cam_fps:.2f} | Slopes FPS: {slopes_fps:.2f}", end='\r')
             except KeyboardInterrupt:
                 print("\nStopping all threads and exiting...")
             finally:
+                frame_queue_thread.stop()
                 camera_thread.stop()
                 slopes_thread.stop()
                 cv2.destroyAllWindows()
