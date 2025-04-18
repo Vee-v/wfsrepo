@@ -568,3 +568,37 @@ def fit_slopes_to_zernike(slopes, A):
     s = torch.cat([slopes_cpu[:, 0], slopes_cpu[:, 1]], dim=0).numpy()
     coeffs, *_ = np.linalg.lstsq(A, s, rcond=None)
     return torch.tensor(coeffs, dtype=slopes.dtype, device=slopes.device)
+
+def show_zernike_barplot_opencv(coeffs, height, frame_height):
+    """
+    Plots the Zernike coefficients as a bar plot using matplotlib and returns it as a numpy array (BGR for OpenCV).
+    Args:
+        coeffs: torch tensor or numpy array of Zernike coefficients
+        height: height of the output image (should match frame height)
+        frame_height: height of the frame (for vertical alignment)
+    Returns:
+        img_bgr: numpy array (height, width, 3) suitable for OpenCV display
+    """
+    if isinstance(coeffs, torch.Tensor):
+        coeffs = coeffs.detach().cpu().numpy()
+    # Make the bar plot tall to match the frame height, and wide for readability
+    width = int(height * 16/9)  # aspect ratio for bar plot
+    fig, ax = plt.subplots(figsize=(width/100, height/100), dpi=100)
+    ax.bar(np.arange(1, len(coeffs)+1), coeffs)
+    ax.set_xlabel('Zernike Mode (Noll index)')
+    ax.set_ylabel('Coefficient')
+    ax.set_title('Zernike Coefficients')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.6)
+    fig.tight_layout()
+    fig.canvas.draw()
+    img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close(fig)
+    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    # Pad or crop to match frame height
+    if img_bgr.shape[0] < frame_height:
+        pad = frame_height - img_bgr.shape[0]
+        img_bgr = np.pad(img_bgr, ((0, pad), (0, 0), (0, 0)), mode='constant', constant_values=255)
+    elif img_bgr.shape[0] > frame_height:
+        img_bgr = img_bgr[:frame_height, :, :]
+    return img_bgr

@@ -3,6 +3,7 @@ from wfsstartup import startup
 from vmbpy import VmbSystem
 import queue
 import cv2
+import numpy as np
 
 
 if __name__ == "__main__":
@@ -18,7 +19,7 @@ if __name__ == "__main__":
             slopes_thread.start()
 
             # Precompute Zernike design matrix for valid subaps
-            N_zernike = 8  # or any number of Zernike modes you want
+            N_zernike = 15  # or any number of Zernike modes you want
             # Use subaperture center positions for Zernike fit
             subap_positions = calculate_subaperture_positions(grid_size=11, subap_size=28)  # shape [121, 2], in pixels
             valid_subap_positions = subap_positions[valid_subap_mask].detach().cpu()
@@ -33,18 +34,33 @@ if __name__ == "__main__":
                 while True:
                     frame = latest_frame[0]
                     if frame is not None:
-                        cv2.imshow('WFS frame', frame)
-                        key = cv2.waitKey(1) & 0xFF
-                        if key == ord('q'):
-                            break
+                        if latest_slopes is not None:
+                            zernike_coeffs = fit_slopes_to_zernike(latest_slopes, zernike_A)
+                            # Make the bar plot as tall as the frame, and wide enough for readability
+                            barplot_img = show_zernike_barplot_opencv(zernike_coeffs, height=frame.shape[0], frame_height=frame.shape[0])
+                            # Ensure frame is 3-channel for stacking
+                            if frame.ndim == 2:
+                                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                            else:
+                                frame_bgr = frame
+                            # Horizontally stack frame and barplot
+                            combined = np.hstack([frame_bgr, barplot_img])
+                            cv2.imshow('WFS frame', combined)
+                            key = cv2.waitKey(1) & 0xFF
+                            if key == ord('q'):
+                                break
+                        else:
+                            cv2.imshow('WFS frame', frame)
+                            key = cv2.waitKey(1) & 0xFF
+                            if key == ord('q'):
+                                break
                     print(f"Frame queue size: {frame_queue.qsize()} ", end=' | ')
                     cam_fps = camera_thread.get_fps()
                     slopes_fps = slopes_thread.get_fps()
                     latest_slopes = slopes_thread.get_slopes()
-                    # Calculate and print Zernike coefficients if slopes are available
+                    # Calculate and display Zernike coefficients if slopes are available
                     if latest_slopes is not None:
                         zernike_coeffs = fit_slopes_to_zernike(latest_slopes, zernike_A)
-                        print(f"Zernike coeffs: {zernike_coeffs.cpu().numpy()}", end=' | ')
                     print(f"Camera FPS: {cam_fps:.2f} | Slopes FPS: {slopes_fps:.2f}", end='\r')
             except KeyboardInterrupt:
                 print("\nStopping all threads and exiting...")
