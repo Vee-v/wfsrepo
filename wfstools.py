@@ -14,6 +14,8 @@ from vmbpy import PixelFormat
 from scipy.optimize import curve_fit
 from tqdm import tqdm
 import cv2
+from prysm.polynomials.zernike import zernike_nm_der
+import numpy as np
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -507,3 +509,62 @@ def grab_frames_to_array(cam, n_frames, camera_thread=None):
     progress_bar.close()  # Close the progress bar
 
     return np.array(frames)
+
+def build_zernike_derivative_matrix(subap_positions, N, noll_to_nm=None, pixel_size_microns=18.0):
+    """
+    Build the design matrix for Zernike polynomial derivatives at given subaperture positions.
+    Args:
+        subap_positions: torch tensor or numpy array, shape [num_valid_subaps, 2], in camera pixels (absolute)
+        N: number of Zernike modes (Noll indices 1..N)
+        noll_to_nm: dict mapping Noll index to (n, m). If None, will generate up to N.
+        pixel_size_microns: size of a pixel in microns (default 18.0)
+    Returns:
+        A: numpy array, shape [2*num_valid_subaps, N]
+    """
+    if isinstance(subap_positions, torch.Tensor):
+        subap_positions = subap_positions.detach().cpu().numpy()
+    # Convert to microns
+    subap_positions_um = subap_positions * pixel_size_microns
+    # Find center (mean of all subap positions)
+    center = np.mean(subap_positions_um, axis=0)
+    # Shift to center
+    subap_positions_um_centered = subap_positions_um - center
+    # Compute radius for each subap
+    radii = np.hypot(subap_positions_um_centered[:, 0], subap_positions_um_centered[:, 1])
+    max_radius = np.max(radii)
+    # Normalize to unit circle
+    x = subap_positions_um_centered[:, 0] / max_radius
+    y = subap_positions_um_centered[:, 1] / max_radius
+    r = np.hypot(x, y)
+    theta = np.arctan2(y, x)
+    num = len(x)
+    if noll_to_nm is None:
+        from prysm.polynomials.zernike import noll_to_nm as prysm_noll_to_nm
+        noll_to_nm = {j: prysm_noll_to_nm(j) for j in range(1, N+1)}
+    A = np.zeros((2 * num, N))
+    for j in range(N):
+        n, m = noll_to_nm[j+1]
+        dZ_dr, dZ_dtheta = zernike_nm_der(n, m, r, theta, norm=True)
+        dZ_dx = np.cos(theta) * dZ_dr - np.sin(theta) * dZ_dtheta / np.where(r == 0, 1, r)
+        dZ_dy = np.sin(theta) * dZ_dr + np.cos(theta) * dZ_dtheta / np.where(r == 0, 1, r)
+        A[:num, j] = dZ_dx
+        A[num:, j] = dZ_dy
+    return A
+
+def fit_slopes_to_zernike(slopes, A):
+    """
+    Fit measured slopes to Zernike coefficients using a precomputed design matrix.
+    Args:
+        slopes: torch tensor, shape [num_valid_subaps, 2], on GPU
+        A: numpy array, shape [2*num_valid_subaps, N] (from build_zernike_derivative_matrix)
+    Returns:
+        coeffs: torch tensor, shape [N], on GPU
+    """
+    if slopes.is_cuda:
+        slopes_cpu = slopes.detach().cpu()
+    else:
+        slopes_cpu = slopes
+    num = slopes_cpu.shape[0]
+    s = torch.cat([slopes_cpu[:, 0], slopes_cpu[:, 1]], dim=0).numpy()
+    coeffs, *_ = np.linalg.lstsq(A, s, rcond=None)
+    return torch.tensor(coeffs, dtype=slopes.dtype, device=slopes.device)
