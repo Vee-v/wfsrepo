@@ -381,6 +381,16 @@ def split_wfs_image(img):
     subaps = img.unfold(0, 28, 28).unfold(1, 28, 28)
     return subaps.contiguous().view(-1, 28, 28)
 
+def calculate_mla_tt_misalignment(imgs, reference_positions):
+    centroids = torch.zeros(len(imgs), 121, 2, device=device)
+    for i, img in enumerate(imgs):
+        subaps = split_wfs_image(img)
+        centroids[i, :, :] = center_of_gravity(subaps)
+    centroids = torch.mean(centroids, axis=0)
+    slopes = centroids_to_slopes(centroids, reference_positions)
+    # print(slopes.shape)
+    return torch.sin(torch.mean(slopes, axis=0))*13800 # in microns  
+
 def get_valid_subaps_mask(subaps, noise_baseline, factor=3, min_pixels=3):
     """
     Returns a boolean mask indicating which subapertures are valid.

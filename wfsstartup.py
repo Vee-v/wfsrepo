@@ -43,6 +43,11 @@ def startup(cam):
     plt.savefig(Path("calib") / Path("rotational_misalignment.png"))
     plt.show()
     reference_positions = calculate_reference(subap_positions, theta)
+    # 3.5 correct for tiptilt misalignment
+    deltas = calculate_mla_tt_misalignment(frames, reference_positions) # microns
+    reference_positions = calculate_reference(subap_positions, theta, deltas)
+    print(f"Final tiptilt misalignment = X {torch.rad2deg(torch.arctan(deltas[0] / 13800))}, Y {torch.rad2deg(torch.arctan(deltas[1] / 13800))} degrees")
+    print(f"Final tiptilt misalignment = X {deltas[0]}, Y {deltas[1]} microns")
     # 4 Subtract the intrinsic aberrations to the reference positions
     reference_positions -= torch.from_numpy(mla_intr_shift).to(device, dtype=torch.float32)
     # 5 Get valid subaperture mask
@@ -50,6 +55,7 @@ def startup(cam):
     subaps = split_wfs_image(img)
     # Estimate noise baseline (e.g., from a dark frame or the lowest 5% of all pixels)
     noise_baseline = torch.quantile(subaps, 0.05)
+    print(f"Noise baseline: {noise_baseline}")
     valid_subaps_mask = get_valid_subaps_mask(subaps, noise_baseline)
 
 
