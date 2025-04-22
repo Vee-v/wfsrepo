@@ -44,7 +44,7 @@ def startup(cam):
     plt.show()
     reference_positions = calculate_reference(subap_positions, theta)
     # 3.5 correct for tiptilt misalignment
-    deltas = calculate_mla_tt_misalignment(frames, reference_positions) # microns
+    deltas = calculate_mla_tt_misalignment(torch.from_numpy(frames).to(device, dtype=torch.float32), reference_positions) # microns
     reference_positions = calculate_reference(subap_positions, theta, deltas)
     print(f"Final tiptilt misalignment = X {torch.rad2deg(torch.arctan(deltas[0] / 13800))}, Y {torch.rad2deg(torch.arctan(deltas[1] / 13800))} degrees")
     print(f"Final tiptilt misalignment = X {deltas[0]}, Y {deltas[1]} microns")
