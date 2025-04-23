@@ -17,9 +17,11 @@ if __name__ == "__main__":
             reference_positions, camera_thread, valid_subap_mask = startup(cam)
             slopes_thread = SlopesThread(frame_queue, reference_positions, valid_subap_mask)
             slopes_thread.start()
-
+            # reduce exposure time
+            cam.ExposureTime.set(21.481+3000)
             # Precompute Zernike design matrix for valid subaps
-            N_zernike = 15  # or any number of Zernike modes you want
+            input("Remove calibration lamp... \nPress Enter to continue and compute Zernike coefficients...")
+            N_zernike = int(input("How many zernike modes to plot? \n"))
             # Use subaperture center positions for Zernike fit
             subap_positions = calculate_subaperture_positions(grid_size=11, subap_size=28)  # shape [121, 2], in pixels
             valid_subap_positions = subap_positions[valid_subap_mask].detach().cpu()

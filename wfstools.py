@@ -346,7 +346,7 @@ def calculate_rotational_misalignment(img, cam):
 
     return np.arctan(popt[0])
 
-def calculate_reference(subap_positions, theta, deltas=torch.zeros(1, dtype=torch.float32)):
+def calculate_reference(subap_positions, theta, deltas=torch.zeros(1, dtype=torch.float32, device=device)):
     """
     Calculates correct reference by comparing centroids to rotated expected positions.
 
@@ -582,6 +582,7 @@ def fit_slopes_to_zernike(slopes, A):
 def show_zernike_barplot_opencv(coeffs, height, frame_height):
     """
     Plots the Zernike coefficients as a bar plot using matplotlib and returns it as a numpy array (BGR for OpenCV).
+    Coefficients are shown in units of waves (radians / 2pi).
     Args:
         coeffs: torch tensor or numpy array of Zernike coefficients
         height: height of the output image (should match frame height)
@@ -591,12 +592,13 @@ def show_zernike_barplot_opencv(coeffs, height, frame_height):
     """
     if isinstance(coeffs, torch.Tensor):
         coeffs = coeffs.detach().cpu().numpy()
-    # Make the bar plot tall to match the frame height, and wide for readability
+    # Convert coefficients from radians to waves
+    coeffs_waves = coeffs / (2 * np.pi)
     width = int(height * 16/9)  # aspect ratio for bar plot
     fig, ax = plt.subplots(figsize=(width/100, height/100), dpi=100)
-    ax.bar(np.arange(1, len(coeffs)+1), coeffs)
+    ax.bar(np.arange(1, len(coeffs_waves)+1), coeffs_waves)
     ax.set_xlabel('Zernike Mode (Noll index)')
-    ax.set_ylabel('Coefficient')
+    ax.set_ylabel('Coefficient [waves]')
     ax.set_title('Zernike Coefficients')
     ax.grid(True, axis='y', linestyle='--', alpha=0.6)
     fig.tight_layout()
