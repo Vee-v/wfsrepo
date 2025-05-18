@@ -243,7 +243,7 @@ def set_camera_parameters(camera: Camera, t_exp=None):
         # Set ROI (Region of Interest)
         camera.Width.set(312)
         camera.Height.set(312)
-        camera.OffsetX.set(0)  # 816/2=408; 408-304=104; 104/2=52; for some reason the offset in X is now at 0.
+        camera.OffsetX.set(48)  # 816/2=408; 408-304=104; 104/2=52; for some reason the offset in X is now at 0.
         camera.OffsetY.set(0)   # 624/2=312; 312-304=8; 8/2=4
 
         # Set exposure time
@@ -389,7 +389,7 @@ def calculate_mla_tt_misalignment(imgs, reference_positions):
     centroids = torch.mean(centroids, axis=0)
     slopes = centroids_to_slopes(centroids, reference_positions)
     # print(slopes.shape)
-    return torch.sin(torch.mean(slopes, axis=0))*13800 # in microns  
+    return torch.sin(torch.mean(slopes, axis=0))*13800 # type: ignore # in microns  
 
 def get_valid_subaps_mask(subaps, noise_baseline, factor=3, min_pixels=3):
     """
