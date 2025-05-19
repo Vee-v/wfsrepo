@@ -614,3 +614,43 @@ def show_zernike_barplot_opencv(coeffs, height, frame_height):
     elif img_bgr.shape[0] > frame_height:
         img_bgr = img_bgr[:frame_height, :, :]
     return img_bgr
+
+def show_slopes_barplot_opencv(slopes, height, frame_height):
+    """
+    Plots the x and y slopes as a grouped bar plot using matplotlib and returns it as a numpy array (BGR for OpenCV).
+    Args:
+        slopes: torch tensor or numpy array of shape (N, 2) with x and y slopes
+        height: height of the output image (should match frame height)
+        frame_height: height of the frame (for vertical alignment)
+    Returns:
+        img_bgr: numpy array (height, width, 3) suitable for OpenCV display
+    """
+    if isinstance(slopes, torch.Tensor):
+        slopes = slopes.detach().cpu().numpy()
+    slopes_x = slopes[:, 0]
+    slopes_y = slopes[:, 1]
+    N = len(slopes_x)
+    width = int(height * 16/9)  # aspect ratio for bar plot
+    fig, ax = plt.subplots(figsize=(width/100, height/100), dpi=100)
+    indices = np.arange(1, N+1)
+    bar_width = 0.4
+    ax.bar(indices - bar_width/2, slopes_x, width=bar_width, label='x-slope')
+    ax.bar(indices + bar_width/2, slopes_y, width=bar_width, label='y-slope')
+    ax.set_xlabel('Subaperture Index')
+    ax.set_ylabel('Slope Value')
+    ax.set_title('Subaperture Slopes')
+    ax.legend()
+    ax.grid(True, axis='y', linestyle='--', alpha=0.6)
+    fig.tight_layout()
+    fig.canvas.draw()
+    img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close(fig)
+    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    # Pad or crop to match frame height
+    if img_bgr.shape[0] < frame_height:
+        pad = frame_height - img_bgr.shape[0]
+        img_bgr = np.pad(img_bgr, ((0, pad), (0, 0), (0, 0)), mode='constant', constant_values=255)
+    elif img_bgr.shape[0] > frame_height:
+        img_bgr = img_bgr[:frame_height, :, :]
+    return img_bgr
