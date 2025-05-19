@@ -18,7 +18,7 @@ if __name__ == "__main__":
             slopes_thread = SlopesThread(frame_queue, reference_positions, valid_subap_mask)
             slopes_thread.start()
             # reduce exposure time
-            cam.ExposureTime.set(21.481+3000)
+            cam.ExposureTime.set(21.481*3)
             # Precompute Zernike design matrix for valid subaps
             input("Remove calibration lamp... \nPress Enter to continue and compute Zernike coefficients...")
             N_zernike = int(input("How many zernike modes to plot? \n"))

@@ -6,7 +6,7 @@ from astropy.visualization import hist
 from scipy.stats import norm
 from pathlib import Path
 
-exp_time = 300
+exp_time = 30
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 subap_positions = calculate_subaperture_positions(grid_size=11)
 
