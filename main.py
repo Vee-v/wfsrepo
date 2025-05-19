@@ -38,15 +38,16 @@ if __name__ == "__main__":
                     if frame is not None:
                         if latest_slopes is not None:
                             zernike_coeffs = fit_slopes_to_zernike(latest_slopes, zernike_A)
-                            # Make the bar plot as tall as the frame, and wide enough for readability
-                            barplot_img = show_zernike_barplot_opencv(zernike_coeffs, height=frame.shape[0], frame_height=frame.shape[0])
+                            # Make the bar plots as tall as the frame, and wide enough for readability
+                            slopes_barplot_img = show_slopes_barplot_opencv(latest_slopes, height=frame.shape[0], frame_height=frame.shape[0])
+                            zernike_barplot_img = show_zernike_barplot_opencv(zernike_coeffs, height=frame.shape[0], frame_height=frame.shape[0])
                             # Ensure frame is 3-channel for stacking
                             if frame.ndim == 2:
                                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
                             else:
                                 frame_bgr = frame
-                            # Horizontally stack frame and barplot
-                            combined = np.hstack([frame_bgr, barplot_img])
+                            # Horizontally stack frame, slopes barplot, and zernike barplot
+                            combined = np.hstack([frame_bgr, slopes_barplot_img, zernike_barplot_img])
                             cv2.imshow('WFS frame', combined)
                             key = cv2.waitKey(1) & 0xFF
                             if key == ord('q'):
