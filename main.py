@@ -25,11 +25,11 @@ if __name__ == "__main__":
             cam.ExposureTime.set(21.481*3)
             # Precompute Zernike design matrix for valid subaps
             input("Press Enter to continue and build imat...")
-            # N_zernike = int(input("How many zernike modes to plot? \n"))
+            N_zernike = int(input("How many zernike modes to plot? \n"))
             # Use subaperture center positions for Zernike fit
             subap_positions = calculate_subaperture_positions(grid_size=11, subap_size=28)  # shape [121, 2], in pixels
             valid_subap_positions = subap_positions[valid_subap_mask].detach().cpu()
-            # zernike_A = build_zernike_derivative_matrix(valid_subap_positions, N_zernike)
+            zernike_A = build_zernike_derivative_matrix(valid_subap_positions, N_zernike)
 
             # Use a one-element list for thread-safe frame sharing
             latest_frame = [None]
