@@ -26,6 +26,7 @@ class CameraThread:
     def __init__(self, cam):
         self.cam = cam
         self.latest_frame = None
+        self.master_dark = None
         self.frame_lock = threading.Lock()
         self.running = threading.Event()
         self.thread = threading.Thread(target=self._run)
@@ -75,7 +76,7 @@ class CameraThread:
             with self.frame_lock:
                 frame = self.latest_frame.copy() if self.latest_frame is not None else None
             self._new_frame_event.clear()
-            return frame
+            return frame - self.master_dark if self.master_dark is not None else frame
         return None
 
     def get_fps(self):
@@ -83,10 +84,11 @@ class CameraThread:
 
 
 class SlopesThread:
-    def __init__(self, frame_queue, reference_positions, valid_subap_mask):
+    def __init__(self, frame_queue, reference_positions, valid_subap_mask, angular=True):
         self.frame_queue = frame_queue
         self.reference_positions = reference_positions
         self.valid_subap_mask = valid_subap_mask
+        self.angular = angular  # Set to True for angular slopes, False for microns
         self.latest_slopes = None
         self.slopes_lock = threading.Lock()
         self.running = threading.Event()
@@ -115,7 +117,7 @@ class SlopesThread:
             img = torch.from_numpy(frame).to(device, dtype=torch.float32).squeeze()
             subaps = split_wfs_image(img)
             centroids = center_of_gravity(subaps)
-            slopes = centroids_to_slopes(centroids, self.reference_positions)
+            slopes = centroids_to_slopes(centroids, self.reference_positions, self.angular)
             slopes = slopes[self.valid_subap_mask]
             with self.slopes_lock:
                 self.latest_slopes = slopes
@@ -248,7 +250,7 @@ def set_camera_parameters(camera: Camera, t_exp=None):
 
         # Set exposure time
         if t_exp is None:
-            camera.ExposureTime.set(30)  # in microseconds
+            camera.ExposureTime.set(21.481)  # in microseconds
         else:
             camera.ExposureTime.set(t_exp)
 
@@ -308,9 +310,15 @@ def center_of_gravity(img):
 
     return torch.cat([x_centroid, y_centroid], dim=-1).squeeze()  # Shape: [B, 2]
 
-def centroids_to_slopes(centroids, reference):
-    slopes = (centroids - reference) * 18 / 13800  # radian
-    return torch.arcsin(slopes)
+def centroids_to_slopes(centroids, reference, angular=True):
+    """Converts centroids from pixel values (9 microns per pixel, 
+    18 microns per pixel with 2x2 binning) to slopes in radians."""
+    if angular:
+        slopes = (centroids - reference) * 18 / 13800  # radian
+        torch.arcsin(slopes)
+    else:
+        slopes = (centroids - reference) * 18  # microns
+    return slopes
 
 def hudgin_slopes(slopes):  # optimizar
     edge_slopes = list(range(10, 121, 11))
@@ -386,15 +394,15 @@ def calculate_mla_tt_misalignment(imgs, reference_positions):
     for i, img in enumerate(imgs):
         subaps = split_wfs_image(img)
         centroids[i, :, :] = center_of_gravity(subaps)
-    centroids = torch.mean(centroids, axis=0)
-    slopes = centroids_to_slopes(centroids, reference_positions)
-    # print(slopes.shape)
-    return torch.sin(torch.mean(slopes, axis=0))*13800 # in microns  
+    centroids = torch.mean(centroids, dim=0) # Average over all frames
+    slopes = centroids_to_slopes(centroids, reference_positions, angular=False)  # microns
+    slopes = torch.mean(slopes, dim=0)  # Average over all slopes separated by axis.
+    return slopes # in microns  
 
-def get_valid_subaps_mask(subaps, noise_baseline, factor=3, min_pixels=3):
+def get_valid_subaps_mask(subaps, noise_baseline, factor=3, min_pixels=2):
     """
     Returns a boolean mask indicating which subapertures are valid.
-    A subaperture is valid if it contains at least min_pixels pixels above factor * noise_baseline.
+    A subaperture is valid if it contains at least min_pixels pixels above factor + noise_baseline.
     
     Args:
         subaps (Tensor): (N, 28, 28) tensor of subaperture images.
@@ -405,7 +413,7 @@ def get_valid_subaps_mask(subaps, noise_baseline, factor=3, min_pixels=3):
     Returns:
         Tensor: Boolean mask of shape (N,) indicating valid subapertures.
     """
-    threshold = factor * noise_baseline
+    threshold = factor + noise_baseline
     active_pixels = (subaps > threshold).sum(dim=(1,2))
     return active_pixels >= min_pixels
 
@@ -491,7 +499,7 @@ def grab_frames_to_array(cam, n_frames, camera_thread=None):
     """
     frames = []
     if camera_thread is not None:
-        for _ in tqdm(range(n_frames), desc="Grabbing frames (thread)", unit="frame"):
+        for _ in tqdm(range(n_frames), desc="Grabbing frames", unit="frame"):
             frame = camera_thread.get_frame()
             if frame is not None:
                 frames.append(frame)
@@ -568,39 +576,44 @@ def fit_slopes_to_zernike(slopes, A):
         slopes: torch tensor, shape [num_valid_subaps, 2], on GPU
         A: numpy array, shape [2*num_valid_subaps, N] (from build_zernike_derivative_matrix)
     Returns:
-        coeffs: torch tensor, shape [N], on GPU
+        coeffs: torch tensor, shape [N], on GPU, units of slopes
     """
     if slopes.is_cuda:
         slopes_cpu = slopes.detach().cpu()
     else:
         slopes_cpu = slopes
-    num = slopes_cpu.shape[0]
     s = torch.cat([slopes_cpu[:, 0], slopes_cpu[:, 1]], dim=0).numpy()
     coeffs, *_ = np.linalg.lstsq(A, s, rcond=None)
-    return torch.tensor(coeffs, dtype=slopes.dtype, device=slopes.device)
+    return torch.tensor(coeffs , dtype=slopes.dtype, device=slopes.device)
 
 def show_zernike_barplot_opencv(coeffs, height, frame_height):
     """
     Plots the Zernike coefficients as a bar plot using matplotlib and returns it as a numpy array (BGR for OpenCV).
-    Coefficients are shown in units of waves (radians / 2pi).
+    Left y-axis: microns. Right y-axis: waves (coeffs_waves).
     Args:
-        coeffs: torch tensor or numpy array of Zernike coefficients
+        coeffs: torch tensor or numpy array of Zernike coefficients (radians)
         height: height of the output image (should match frame height)
         frame_height: height of the frame (for vertical alignment)
     Returns:
         img_bgr: numpy array (height, width, 3) suitable for OpenCV display
     """
-    if isinstance(coeffs, torch.Tensor):
-        coeffs = coeffs.detach().cpu().numpy()
-    # Convert coefficients from radians to waves
-    coeffs_waves = coeffs / (2 * np.pi)
+    coeffs = coeffs.detach().cpu().numpy() * 500  # Convert to microns, given lenslet pitch of 500 microns
+    # Convert coefficients from microns to waves
+    # coeffs_waves = 2 * np.pi ?* coeffs / (13800 * 532e-9)  # 13800 mm is the focal length of the lens, 532 nm is the wavelength
     width = int(height * 16/9)  # aspect ratio for bar plot
-    fig, ax = plt.subplots(figsize=(width/100, height/100), dpi=100)
-    ax.bar(np.arange(1, len(coeffs_waves)+1), coeffs_waves)
-    ax.set_xlabel('Zernike Mode (Noll index)')
-    ax.set_ylabel('Coefficient [waves]')
-    ax.set_title('Zernike Coefficients')
-    ax.grid(True, axis='y', linestyle='--', alpha=0.6)
+    fig, ax1 = plt.subplots(figsize=(width/100, height/100), dpi=100)
+    indices = np.arange(1, len(coeffs)+1)
+    bars = ax1.bar(indices, coeffs, color='tab:blue')
+    ax1.set_xlabel('Zernike Mode (Noll index)')
+    ax1.set_ylabel(r'Coefficient [$\mu m$]', color='tab:blue')
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+    ax1.set_title('Zernike Coefficients')
+    ax1.grid(True, axis='y', linestyle='--', alpha=0.6)
+    # Right y-axis for waves
+    ax2 = ax1.twinx()
+    ax2.set_ylabel(r'Coefficient [waves]', color='tab:red')
+    ax2.tick_params(axis='y', labelcolor='tab:red')
+    ax2.set_ylim(2. * np.pi * ax1.get_ylim()[0]/ 635e-3, 2. * np.pi * ax1.get_ylim()[1]/ 635e-3)
     fig.tight_layout()
     fig.canvas.draw()
     img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)

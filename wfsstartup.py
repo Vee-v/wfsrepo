@@ -6,7 +6,7 @@ from astropy.visualization import hist
 from scipy.stats import norm
 from pathlib import Path
 
-exp_time = 30
+exp_time = 33.324
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 subap_positions = calculate_subaperture_positions(grid_size=11)
 
@@ -22,8 +22,16 @@ def startup(cam):
     # 2 Start camera thread
     camera_thread = CameraThread(cam)
     camera_thread.start()
+    # 2.5 take dark frames
+    print("Taking dark frames...")
+    dark_frames = grab_frames_to_array(cam, 1000, camera_thread=camera_thread)
+    camera_thread.master_dark = np.mean(dark_frames, axis=0)
+    input("Turn on the calibration source and press Enter to continue...")
     # 3 Correct for rotational misalignment with the frames from the async thread
-    frames = grab_frames_to_array(cam, 10000, camera_thread=camera_thread)
+    frames = grab_frames_to_array(cam, 1000, camera_thread=camera_thread)
+    if __name__ == "__main__":
+        camera_thread.stop()
+        return frames
     thetas = np.array([calculate_rotational_misalignment(frame, cam) for frame in frames])
     theta = np.nanmean(thetas)
     theta_err = np.nanstd(thetas)
@@ -44,12 +52,12 @@ def startup(cam):
     plt.show()
     reference_positions = calculate_reference(subap_positions, theta)
     # 3.5 correct for tiptilt misalignment
-    deltas = calculate_mla_tt_misalignment(torch.from_numpy(frames).to(device, dtype=torch.float32), reference_positions) # microns
-    reference_positions = calculate_reference(subap_positions, theta, deltas)
-    print(f"Final tiptilt misalignment = X {torch.rad2deg(torch.arctan(deltas[0] / 13800))}, Y {torch.rad2deg(torch.arctan(deltas[1] / 13800))} degrees")
-    print(f"Final tiptilt misalignment = X {deltas[0]}, Y {deltas[1]} microns")
+    # deltas = calculate_mla_tt_misalignment(torch.from_numpy(frames).to(device, dtype=torch.float32), reference_positions) # microns
+    # reference_positions = calculate_reference(subap_positions, theta, deltas)
+    # print(f"Final tiptilt misalignment = X {torch.rad2deg(torch.arctan(deltas[0] / 13800))}, Y {torch.rad2deg(torch.arctan(deltas[1] / 13800))} degrees")
+    # print(f"Final tiptilt misalignment = X {deltas[0]}, Y {deltas[1]} microns")
     # 4 Subtract the intrinsic aberrations to the reference positions
-    reference_positions -= torch.from_numpy(mla_intr_shift).to(device, dtype=torch.float32)
+    # reference_positions -= torch.from_numpy(mla_intr_shift).to(device, dtype=torch.float32)
     # 5 Get valid subaperture mask
     img = torch.from_numpy(frames.mean(axis=0)).to(device, dtype=torch.float32).squeeze()
     subaps = split_wfs_image(img)
@@ -62,3 +70,20 @@ def startup(cam):
     return reference_positions, camera_thread, valid_subaps_mask
 
 
+if __name__ == "__main__": 
+    print("WFS frame saving mode")
+    print("Starting up the camera...")
+    with VmbSystem.get_instance() as vmb:
+        cams = vmb.get_all_cameras()
+        with cams[0] as cam:
+            frames = startup(cam)
+            mean_frame = np.mean(frames, axis=0)
+            np.save("calib/mean_frame.npy", mean_frame)
+            plt.figure()
+            plt.imshow(mean_frame, cmap='gray')
+            plt.title("Mean Frame")
+            plt.colorbar()
+            plt.savefig("calib/mean_frame.png")
+            plt.show()
+            
+   
