@@ -61,8 +61,8 @@ def startup(cam):
     # 5 Get valid subaperture mask
     img = torch.from_numpy(frames.mean(axis=0)).to(device, dtype=torch.float32).squeeze()
     subaps = split_wfs_image(img)
-    # Estimate noise baseline (e.g., from a dark frame or the lowest 5% of all pixels)
-    noise_baseline = torch.quantile(subaps, 0.05)
+    # Estimate noise baseline (e.g., from a dark frame or the lowest 70% of all pixels)
+    noise_baseline = torch.mean(img)
     print(f"Noise baseline: {noise_baseline}")
     valid_subaps_mask = get_valid_subaps_mask(subaps, noise_baseline)
 

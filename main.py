@@ -5,7 +5,7 @@ import queue
 import cv2
 import numpy as np
 
-def overlay_subaperture_hues(frame, valid_subap_mask, grid_size=11, subap_size=28, alpha=0.35):
+def overlay_subaperture_hues(frame, valid_subap_mask, grid_size=11, subap_size=28, alpha=0.1):
     """
     Overlay green on valid subaps and red on invalid subaps.
     frame: (H, W) or (H, W, 3) numpy array
