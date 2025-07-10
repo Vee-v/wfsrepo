@@ -5,27 +5,6 @@ import queue
 import cv2
 import numpy as np
 
-def overlay_subaperture_hues(frame, valid_subap_mask, grid_size=11, subap_size=28, alpha=0.1):
-    """
-    Overlay green on valid subaps and red on invalid subaps.
-    frame: (H, W) or (H, W, 3) numpy array
-    valid_subap_mask: (N,) boolean array
-    """
-    if frame.ndim == 2:
-        frame_bgr = cv2.cvtColor(frame.astype("uint8"), cv2.COLOR_GRAY2BGR)
-    else:
-        frame_bgr = frame.copy()
-    overlay = frame_bgr.copy()
-    idx = 0
-    for i in range(grid_size):
-        for j in range(grid_size):
-            y0, y1 = i * subap_size, (i + 1) * subap_size
-            x0, x1 = j * subap_size, (j + 1) * subap_size
-            color = (0, 255, 0) if valid_subap_mask[idx] else (0, 0, 255)  # Green or Red (BGR)
-            cv2.rectangle(overlay, (x0, y0), (x1-1, y1-1), color, thickness=-1)
-            idx += 1
-    cv2.addWeighted(overlay, alpha, frame_bgr, 1 - alpha, 0, frame_bgr)
-    return frame_bgr
 
 if __name__ == "__main__":
     print("Starting up the camera...")

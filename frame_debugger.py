@@ -8,7 +8,7 @@ import time
 # Initial exposure time (from wfsstartup.py)
 exp_time = 21.481
 
-def find_best_exposure_time(cam, camera_thread, max_val=255*.75, min_exp=21.481, max_exp=1000.0, step=1.05, max_iter=20):
+def find_best_exposure_time(cam, camera_thread, max_val=255*.75, min_exp=21.481, max_exp=1000.0, step=1.05, max_iter=100):
     """
     Finds the best exposure time such that no pixels are saturated.
     Args:
